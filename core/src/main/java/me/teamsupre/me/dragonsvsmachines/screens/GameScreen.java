@@ -11,6 +11,7 @@ import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.*;
 import com.badlogic.gdx.utils.viewport.FitViewport;
@@ -20,6 +21,7 @@ import me.teamsupre.me.dragonsvsmachines.entities.Bird;
 import me.teamsupre.me.dragonsvsmachines.entities.Bird.BirdType;
 import me.teamsupre.me.dragonsvsmachines.entities.GameEntity;
 import me.teamsupre.me.dragonsvsmachines.entities.Pig;
+import me.teamsupre.me.dragonsvsmachines.entities.TNT;
 import me.teamsupre.me.dragonsvsmachines.levels.LevelData;
 import me.teamsupre.me.dragonsvsmachines.physics.ContactHandler;
 
@@ -62,6 +64,11 @@ public class GameScreen extends InputAdapter implements Screen {
     private GameState state;
     private float settleTimer;
     private float stateTimer;
+
+    // Camera shake
+    private float shakeIntensity;
+    private float shakeDuration;
+    private float shakeTimer;
 
     public GameScreen(DragonsVsMachines game, int level) {
         this.game = game;
@@ -170,6 +177,7 @@ public class GameScreen extends InputAdapter implements Screen {
 
         // Activate ability if bird is in flight or settling (Bomb can detonate anytime after launch)
         if ((state == GameState.FLYING || state == GameState.SETTLING) && currentBird != null && currentBird.canActivateAbility()) {
+            BirdType activatingType = currentBird.getType();
             List<GameEntity> newEntities = currentBird.activateAbility(world);
             if (newEntities != null) {
                 for (GameEntity e : newEntities) {
@@ -179,6 +187,12 @@ public class GameScreen extends InputAdapter implements Screen {
                         entities.add(e);
                     }
                 }
+            }
+            // Camera shake for explosive abilities
+            if (activatingType == BirdType.BOMB) {
+                triggerShake(0.2f, 0.5f);
+            } else if (activatingType == BirdType.BLUES) {
+                triggerShake(0.08f, 0.2f);
             }
             return true;
         }
@@ -250,6 +264,15 @@ public class GameScreen extends InputAdapter implements Screen {
         return false;
     }
 
+    private void triggerShake(float intensity, float duration) {
+        // Stack shakes — take the stronger one
+        if (intensity > shakeIntensity) {
+            shakeIntensity = intensity;
+        }
+        shakeDuration = Math.max(shakeDuration, duration);
+        shakeTimer = 0;
+    }
+
     // --- Update & Render ---
 
     @Override
@@ -263,6 +286,20 @@ public class GameScreen extends InputAdapter implements Screen {
         Gdx.gl.glClearColor(0.4f, 0.65f, 0.9f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
+        // Apply camera shake
+        camera.position.set(Constants.WORLD_WIDTH / 2f, Constants.WORLD_HEIGHT / 2f, 0);
+        if (shakeTimer < shakeDuration) {
+            shakeTimer += delta;
+            float progress = shakeTimer / shakeDuration;
+            float damping = 1f - progress; // fade out
+            float offsetX = MathUtils.random(-shakeIntensity, shakeIntensity) * damping;
+            float offsetY = MathUtils.random(-shakeIntensity, shakeIntensity) * damping;
+            camera.position.x += offsetX;
+            camera.position.y += offsetY;
+        } else {
+            shakeIntensity = 0;
+            shakeDuration = 0;
+        }
         camera.update();
 
         // Draw filled shapes
@@ -286,6 +323,13 @@ public class GameScreen extends InputAdapter implements Screen {
         // Draw entities
         for (GameEntity entity : entities) {
             entity.render(shapeRenderer);
+        }
+
+        // Debug: draw TNT blast radius (subtle fill)
+        for (GameEntity entity : entities) {
+            if (entity instanceof TNT) {
+                ((TNT) entity).renderBlastRadius(shapeRenderer);
+            }
         }
 
         // Draw current bird on slingshot
@@ -380,6 +424,13 @@ public class GameScreen extends InputAdapter implements Screen {
         // Box2D debug renderer (wireframes)
         debugRenderer.render(world, camera.combined);
 
+        // Debug: draw explosion radius ring (fades after detonation)
+        shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
+        Gdx.gl.glLineWidth(2f);
+        TNT.renderDebugExplosions(shapeRenderer, delta);
+        shapeRenderer.end();
+        Gdx.gl.glLineWidth(1f);
+
         // Draw HUD text
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
@@ -458,8 +509,19 @@ public class GameScreen extends InputAdapter implements Screen {
         for (Bird b : launchedBirds) {
             if (b.isExplodeOnImpact() && b.hasCollided() && !b.isMarkedForRemoval()) {
                 b.triggerExplosion(world);
+                triggerShake(0.15f, 0.4f);
             }
         }
+
+        // Detonate TNTs queued by contact handler
+        List<TNT> tntQueue = contactHandler.getTntToDetonate();
+        for (TNT tnt : tntQueue) {
+            if (!tnt.hasDetonated()) {
+                tnt.detonate(world);
+                triggerShake(0.25f, 0.5f);
+            }
+        }
+        tntQueue.clear();
 
         // Remove destroyed entities
         Iterator<GameEntity> iter = entities.iterator();
