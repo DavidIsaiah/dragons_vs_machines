@@ -18,6 +18,20 @@ public class ContactHandler implements ContactListener {
 
     @Override
     public void beginContact(Contact contact) {
+        if (!damageEnabled) return;
+
+        Object dataA = contact.getFixtureA().getBody().getUserData();
+        Object dataB = contact.getFixtureB().getBody().getUserData();
+
+        // Flag launched explosive birds that have collided with something (not another bird)
+        if (dataA instanceof Bird && ((Bird) dataA).isExplodeOnImpact()
+                && ((Bird) dataA).isLaunched() && !(dataB instanceof Bird)) {
+            ((Bird) dataA).setHasCollided(true);
+        }
+        if (dataB instanceof Bird && ((Bird) dataB).isExplodeOnImpact()
+                && ((Bird) dataB).isLaunched() && !(dataA instanceof Bird)) {
+            ((Bird) dataB).setHasCollided(true);
+        }
     }
 
     @Override

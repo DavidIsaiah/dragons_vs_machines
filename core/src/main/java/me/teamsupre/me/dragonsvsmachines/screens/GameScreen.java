@@ -17,6 +17,7 @@ import com.badlogic.gdx.utils.viewport.FitViewport;
 import me.teamsupre.me.dragonsvsmachines.Constants;
 import me.teamsupre.me.dragonsvsmachines.DragonsVsMachines;
 import me.teamsupre.me.dragonsvsmachines.entities.Bird;
+import me.teamsupre.me.dragonsvsmachines.entities.Bird.BirdType;
 import me.teamsupre.me.dragonsvsmachines.entities.GameEntity;
 import me.teamsupre.me.dragonsvsmachines.entities.Pig;
 import me.teamsupre.me.dragonsvsmachines.levels.LevelData;
@@ -47,9 +48,9 @@ public class GameScreen extends InputAdapter implements Screen {
 
     // Game entities
     private List<GameEntity> entities;
-    private List<Bird> availableBirds;
+    private List<Bird> availableBirds;    // birds waiting to be launched
+    private List<Bird> launchedBirds;     // birds already in play
     private Bird currentBird;
-    private int currentBirdIndex;
 
     // Slingshot state
     private boolean dragging;
@@ -99,15 +100,15 @@ public class GameScreen extends InputAdapter implements Screen {
         createGround();
         LevelData.buildLevel(level, world, entities);
 
-        // Create birds
+        // Create birds with types from level data
         availableBirds = new ArrayList<Bird>();
-        int birdCount = LevelData.getBirdCount(level);
-        for (int i = 0; i < birdCount; i++) {
-            availableBirds.add(new Bird(world, -10, -10)); // offscreen initially
+        launchedBirds = new ArrayList<Bird>();
+        BirdType[] birdTypes = LevelData.getBirdTypes(level);
+        for (BirdType birdType : birdTypes) {
+            availableBirds.add(new Bird(world, -10, -10, birdType));
         }
 
         // Load first bird
-        currentBirdIndex = 0;
         loadNextBird();
 
         state = GameState.AIMING;
@@ -148,8 +149,8 @@ public class GameScreen extends InputAdapter implements Screen {
     }
 
     private void loadNextBird() {
-        if (currentBirdIndex < availableBirds.size()) {
-            currentBird = availableBirds.get(currentBirdIndex);
+        if (!availableBirds.isEmpty()) {
+            currentBird = availableBirds.remove(0);
             currentBird.getBody().setTransform(slingshotAnchor, 0);
             currentBird.getBody().setLinearVelocity(0, 0);
             currentBird.getBody().setAngularVelocity(0);
@@ -164,6 +165,21 @@ public class GameScreen extends InputAdapter implements Screen {
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
         if (state == GameState.WON || state == GameState.LOST) {
             game.setScreen(new LevelSelectScreen(game));
+            return true;
+        }
+
+        // Activate ability if bird is in flight or settling (Bomb can detonate anytime after launch)
+        if ((state == GameState.FLYING || state == GameState.SETTLING) && currentBird != null && currentBird.canActivateAbility()) {
+            List<GameEntity> newEntities = currentBird.activateAbility(world);
+            if (newEntities != null) {
+                for (GameEntity e : newEntities) {
+                    if (e instanceof Bird) {
+                        launchedBirds.add((Bird) e);
+                    } else {
+                        entities.add(e);
+                    }
+                }
+            }
             return true;
         }
 
@@ -215,6 +231,7 @@ public class GameScreen extends InputAdapter implements Screen {
         Vector2 impulse = pull.scl(Constants.LAUNCH_POWER);
         contactHandler.enableDamage();
         currentBird.launch(impulse);
+        launchedBirds.add(currentBird);
         state = GameState.FLYING;
         stateTimer = 0;
         return true;
@@ -271,14 +288,13 @@ public class GameScreen extends InputAdapter implements Screen {
             entity.render(shapeRenderer);
         }
 
-        // Draw current bird
-        if (currentBird != null) {
+        // Draw current bird on slingshot
+        if (currentBird != null && !currentBird.isMarkedForRemoval()) {
             currentBird.render(shapeRenderer);
         }
 
-        // Draw launched birds that are still active
-        for (int i = 0; i < currentBirdIndex; i++) {
-            Bird b = availableBirds.get(i);
+        // Draw all launched birds still in play
+        for (Bird b : launchedBirds) {
             if (!b.isMarkedForRemoval()) {
                 b.render(shapeRenderer);
             }
@@ -369,9 +385,10 @@ public class GameScreen extends InputAdapter implements Screen {
         batch.begin();
 
         font.setColor(Color.WHITE);
-        int birdsLeft = availableBirds.size() - currentBirdIndex - (state == GameState.AIMING ? 0 : 1);
-        if (birdsLeft < 0) birdsLeft = 0;
-        font.draw(batch, "Birds: " + birdsLeft + "  |  Level " + level + "  |  ESC=Menu  R=Restart",
+        int birdsLeft = availableBirds.size();
+
+        String birdName = currentBird != null ? currentBird.getType().name : "";
+        font.draw(batch, "Birds: " + birdsLeft + "  |  " + birdName + "  |  Level " + level + "  |  ESC=Menu  R=Restart",
             0.3f, Constants.WORLD_HEIGHT - 0.3f);
 
         // Pigs remaining
@@ -380,6 +397,23 @@ public class GameScreen extends InputAdapter implements Screen {
             if (e instanceof Pig && !e.isMarkedForRemoval()) pigsLeft++;
         }
         font.draw(batch, "Pigs: " + pigsLeft, 0.3f, Constants.WORLD_HEIGHT - 0.8f);
+
+        // Ability hint during flight
+        if (state == GameState.FLYING && currentBird != null && currentBird.canActivateAbility()) {
+            font.setColor(Color.YELLOW);
+            String hint = "";
+            switch (currentBird.getType()) {
+                case CHUCK: hint = "TAP for Speed Boost!"; break;
+                case BOMB: hint = "TAP to Explode!"; break;
+                case MATILDA: hint = "TAP to Drop Egg!"; break;
+                case BLUES: hint = "TAP to Split!"; break;
+                default: break;
+            }
+            layout.setText(font, hint);
+            font.draw(batch, hint, Constants.WORLD_WIDTH / 2f - layout.width / 2f,
+                Constants.WORLD_HEIGHT - 0.3f);
+            font.setColor(Color.WHITE);
+        }
 
         // Win/Lose overlay
         if (state == GameState.WON) {
@@ -420,6 +454,13 @@ public class GameScreen extends InputAdapter implements Screen {
         // Step physics
         world.step(Constants.PHYSICS_TIME_STEP, Constants.VELOCITY_ITERATIONS, Constants.POSITION_ITERATIONS);
 
+        // Check for explosive birds that have collided (egg bombs)
+        for (Bird b : launchedBirds) {
+            if (b.isExplodeOnImpact() && b.hasCollided() && !b.isMarkedForRemoval()) {
+                b.triggerExplosion(world);
+            }
+        }
+
         // Remove destroyed entities
         Iterator<GameEntity> iter = entities.iterator();
         while (iter.hasNext()) {
@@ -428,6 +469,21 @@ public class GameScreen extends InputAdapter implements Screen {
                 world.destroyBody(entity.getBody());
                 iter.remove();
             }
+        }
+
+        // Remove destroyed launched birds
+        Iterator<Bird> birdIter = launchedBirds.iterator();
+        while (birdIter.hasNext()) {
+            Bird b = birdIter.next();
+            if (b.isMarkedForRemoval()) {
+                world.destroyBody(b.getBody());
+                birdIter.remove();
+            }
+        }
+
+        // Handle currentBird being destroyed by its own ability
+        if (currentBird != null && currentBird.isMarkedForRemoval()) {
+            currentBird = null;
         }
 
         // Check win condition
@@ -449,8 +505,11 @@ public class GameScreen extends InputAdapter implements Screen {
         switch (state) {
             case FLYING:
                 stateTimer += delta;
-                if (currentBird != null) {
-                    // Bird went off screen or stopped
+                if (currentBird == null || currentBird.isMarkedForRemoval()) {
+                    // Bird destroyed itself (Bomb/Blues ability) — move to settling
+                    state = GameState.SETTLING;
+                    settleTimer = 0;
+                } else {
                     Vector2 pos = currentBird.getBody().getPosition();
                     boolean offScreen = pos.x < -2 || pos.x > Constants.WORLD_WIDTH + 2 || pos.y < -2;
                     boolean stopped = stateTimer > 1f && currentBird.isStopped();
@@ -466,8 +525,7 @@ public class GameScreen extends InputAdapter implements Screen {
                 settleTimer += delta;
                 if (settleTimer > 2f) {
                     // Move to next bird or game over
-                    currentBirdIndex++;
-                    if (currentBirdIndex < availableBirds.size()) {
+                    if (!availableBirds.isEmpty()) {
                         loadNextBird();
                         state = GameState.AIMING;
                     } else {
