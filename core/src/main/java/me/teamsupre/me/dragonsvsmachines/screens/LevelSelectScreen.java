@@ -38,17 +38,18 @@ public class LevelSelectScreen implements Screen {
         stage.addActor(table);
 
         Label title = new Label("SELECT LEVEL", skin, "title");
-        table.add(title).colspan(4).padBottom(50).row();
+        table.add(title).colspan(5).padBottom(50).row();
 
-        String[] names = {"Level 1\nSimple Tower", "Level 2\nDouble Towers", "Level 3\nFortress", "Level 4\nCompound"};
+        String[] names = {"Level 1\nSimple Tower", "Level 2\nDouble Towers", "Level 3\nFortress", "Level 4\nCompound", "Level 5\nWarzone"};
         Color[] colors = {
             new Color(0.2f, 0.7f, 0.2f, 1f),
             new Color(0.7f, 0.6f, 0.1f, 1f),
             new Color(0.8f, 0.2f, 0.2f, 1f),
-            new Color(0.5f, 0.1f, 0.5f, 1f)
+            new Color(0.5f, 0.1f, 0.5f, 1f),
+            new Color(0.1f, 0.1f, 0.1f, 1f)
         };
 
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 5; i++) {
             final int level = i + 1;
 
             TextButton.TextButtonStyle style = new TextButton.TextButtonStyle();
@@ -77,7 +78,7 @@ public class LevelSelectScreen implements Screen {
                 game.setScreen(new MainMenuScreen(game));
             }
         });
-        table.add(backBtn).colspan(4).width(200).height(60).padTop(40);
+        table.add(backBtn).colspan(5).width(200).height(60).padTop(40);
     }
 
     private Skin createSkin() {

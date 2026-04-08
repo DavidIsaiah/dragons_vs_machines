@@ -1,9 +1,12 @@
 package me.teamsupre.me.dragonsvsmachines.physics;
 
+import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.*;
 import me.teamsupre.me.dragonsvsmachines.entities.Bird;
 import me.teamsupre.me.dragonsvsmachines.entities.Block;
 import me.teamsupre.me.dragonsvsmachines.entities.Pig;
+import me.teamsupre.me.dragonsvsmachines.entities.Projectile;
+import me.teamsupre.me.dragonsvsmachines.entities.ShooterPig;
 import me.teamsupre.me.dragonsvsmachines.entities.TNT;
 
 import java.util.ArrayList;
@@ -42,6 +45,10 @@ public class ContactHandler implements ContactListener {
                 && ((Bird) dataB).isLaunched() && !(dataA instanceof Bird)) {
             ((Bird) dataB).setHasCollided(true);
         }
+
+        // Projectile hits bird: apply knockback to bird, destroy projectile
+        handleProjectileBirdCollision(dataA, dataB, contact);
+        handleProjectileBirdCollision(dataB, dataA, contact);
     }
 
     @Override
@@ -77,16 +84,31 @@ public class ContactHandler implements ContactListener {
     }
 
     private void applyDamage(Object data, float damage, boolean birdInvolved) {
-        if (data instanceof Pig) {
+        if (data instanceof ShooterPig) {
+            ((ShooterPig) data).takeDamage(damage);
+        } else if (data instanceof Pig) {
             ((Pig) data).takeDamage(damage);
         } else if (data instanceof Block) {
             ((Block) data).takeDamage(damage);
         } else if (data instanceof TNT) {
-            // TNT needs a solid hit to detonate — bird direct hit or heavy debris
             TNT tnt = (TNT) data;
             if (!tnt.hasDetonated() && !tntToDetonate.contains(tnt) && damage > 25f) {
                 tntToDetonate.add(tnt);
             }
         }
+    }
+
+    private void handleProjectileBirdCollision(Object maybeProj, Object maybeBird, Contact contact) {
+        if (!(maybeProj instanceof Projectile) || !(maybeBird instanceof Bird)) return;
+        Projectile proj = (Projectile) maybeProj;
+        Bird bird = (Bird) maybeBird;
+
+        // Apply knockback impulse to the bird
+        Vector2 projVel = proj.getBody().getLinearVelocity();
+        Vector2 knockback = new Vector2(projVel).nor().scl(Projectile.KNOCKBACK_FORCE);
+        bird.getBody().applyLinearImpulse(knockback, bird.getBody().getWorldCenter(), true);
+
+        // Destroy projectile
+        proj.markForRemoval();
     }
 }

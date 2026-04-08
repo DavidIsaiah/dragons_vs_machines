@@ -21,6 +21,8 @@ import me.teamsupre.me.dragonsvsmachines.entities.Bird;
 import me.teamsupre.me.dragonsvsmachines.entities.Bird.BirdType;
 import me.teamsupre.me.dragonsvsmachines.entities.GameEntity;
 import me.teamsupre.me.dragonsvsmachines.entities.Pig;
+import me.teamsupre.me.dragonsvsmachines.entities.Projectile;
+import me.teamsupre.me.dragonsvsmachines.entities.ShooterPig;
 import me.teamsupre.me.dragonsvsmachines.entities.TNT;
 import me.teamsupre.me.dragonsvsmachines.levels.LevelData;
 import me.teamsupre.me.dragonsvsmachines.physics.ContactHandler;
@@ -32,6 +34,10 @@ import java.util.List;
 public class GameScreen extends InputAdapter implements Screen {
     private final DragonsVsMachines game;
     private final int level;
+    private float worldWidth;
+
+    // Projectiles from shooter pigs
+    private List<Projectile> projectiles;
 
     // Physics
     private World world;
@@ -77,10 +83,15 @@ public class GameScreen extends InputAdapter implements Screen {
 
     @Override
     public void show() {
-        // Camera setup
+        // Per-level world width
+        worldWidth = LevelData.getWorldWidth(level);
+
+        // Camera setup — wider viewport for wider levels
         camera = new OrthographicCamera();
-        viewport = new FitViewport(Constants.WORLD_WIDTH, Constants.WORLD_HEIGHT, camera);
-        camera.position.set(Constants.WORLD_WIDTH / 2f, Constants.WORLD_HEIGHT / 2f, 0);
+        float viewHeight = Constants.WORLD_HEIGHT;
+        float viewWidth = Math.max(Constants.WORLD_WIDTH, worldWidth);
+        viewport = new FitViewport(viewWidth, viewHeight, camera);
+        camera.position.set(worldWidth / 2f, viewHeight / 2f, 0);
         camera.update();
 
         // Physics world
@@ -104,6 +115,7 @@ public class GameScreen extends InputAdapter implements Screen {
 
         // Build the level
         entities = new ArrayList<GameEntity>();
+        projectiles = new ArrayList<Projectile>();
         createGround();
         LevelData.buildLevel(level, world, entities);
 
@@ -127,12 +139,12 @@ public class GameScreen extends InputAdapter implements Screen {
     private void createGround() {
         BodyDef groundDef = new BodyDef();
         groundDef.type = BodyDef.BodyType.StaticBody;
-        groundDef.position.set(Constants.WORLD_WIDTH / 2f, Constants.GROUND_HEIGHT / 2f);
+        groundDef.position.set(worldWidth / 2f, Constants.GROUND_HEIGHT / 2f);
 
         Body ground = world.createBody(groundDef);
 
         PolygonShape groundBox = new PolygonShape();
-        groundBox.setAsBox(Constants.WORLD_WIDTH / 2f, Constants.GROUND_HEIGHT / 2f);
+        groundBox.setAsBox(worldWidth / 2f, Constants.GROUND_HEIGHT / 2f);
 
         FixtureDef fixtureDef = new FixtureDef();
         fixtureDef.shape = groundBox;
@@ -142,12 +154,10 @@ public class GameScreen extends InputAdapter implements Screen {
         ground.createFixture(fixtureDef);
         groundBox.dispose();
 
-        // Walls to keep things in bounds
+        // Right wall
         BodyDef wallDef = new BodyDef();
         wallDef.type = BodyDef.BodyType.StaticBody;
-
-        // Right wall
-        wallDef.position.set(Constants.WORLD_WIDTH, Constants.WORLD_HEIGHT / 2f);
+        wallDef.position.set(worldWidth, Constants.WORLD_HEIGHT / 2f);
         Body rightWall = world.createBody(wallDef);
         PolygonShape wallShape = new PolygonShape();
         wallShape.setAsBox(0.1f, Constants.WORLD_HEIGHT / 2f);
@@ -287,7 +297,7 @@ public class GameScreen extends InputAdapter implements Screen {
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
         // Apply camera shake
-        camera.position.set(Constants.WORLD_WIDTH / 2f, Constants.WORLD_HEIGHT / 2f, 0);
+        camera.position.set(worldWidth / 2f, Constants.WORLD_HEIGHT / 2f, 0);
         if (shakeTimer < shakeDuration) {
             shakeTimer += delta;
             float progress = shakeTimer / shakeDuration;
@@ -309,7 +319,7 @@ public class GameScreen extends InputAdapter implements Screen {
 
         // Ground
         shapeRenderer.setColor(0.3f, 0.6f, 0.2f, 1f);
-        shapeRenderer.rect(0, 0, Constants.WORLD_WIDTH, Constants.GROUND_HEIGHT);
+        shapeRenderer.rect(0, 0, worldWidth, Constants.GROUND_HEIGHT);
 
         // Slingshot base
         shapeRenderer.setColor(0.4f, 0.25f, 0.1f, 1f);
@@ -330,6 +340,18 @@ public class GameScreen extends InputAdapter implements Screen {
             if (entity instanceof TNT) {
                 ((TNT) entity).renderBlastRadius(shapeRenderer);
             }
+        }
+
+        // Debug: draw shooter pig attack range (subtle fill)
+        for (GameEntity entity : entities) {
+            if (entity instanceof ShooterPig) {
+                ((ShooterPig) entity).renderAttackRange(shapeRenderer);
+            }
+        }
+
+        // Draw projectiles
+        for (Projectile p : projectiles) {
+            p.render(shapeRenderer);
         }
 
         // Draw current bird on slingshot
@@ -402,8 +424,8 @@ public class GameScreen extends InputAdapter implements Screen {
                         }
 
                         // Right wall bounce
-                        if (simX >= Constants.WORLD_WIDTH) {
-                            simX = Constants.WORLD_WIDTH;
+                        if (simX >= worldWidth) {
+                            simX = worldWidth;
                             simVx = -simVx * restitution;
                         }
                     }
@@ -424,10 +446,15 @@ public class GameScreen extends InputAdapter implements Screen {
         // Box2D debug renderer (wireframes)
         debugRenderer.render(world, camera.combined);
 
-        // Debug: draw explosion radius ring (fades after detonation)
+        // Debug: draw explosion radius ring and shooter pig range outlines
         shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
         Gdx.gl.glLineWidth(2f);
         TNT.renderDebugExplosions(shapeRenderer, delta);
+        for (GameEntity entity : entities) {
+            if (entity instanceof ShooterPig) {
+                ((ShooterPig) entity).renderAttackRangeOutline(shapeRenderer);
+            }
+        }
         shapeRenderer.end();
         Gdx.gl.glLineWidth(1f);
 
@@ -445,7 +472,7 @@ public class GameScreen extends InputAdapter implements Screen {
         // Pigs remaining
         int pigsLeft = 0;
         for (GameEntity e : entities) {
-            if (e instanceof Pig && !e.isMarkedForRemoval()) pigsLeft++;
+            if ((e instanceof Pig || e instanceof ShooterPig) && !e.isMarkedForRemoval()) pigsLeft++;
         }
         font.draw(batch, "Pigs: " + pigsLeft, 0.3f, Constants.WORLD_HEIGHT - 0.8f);
 
@@ -472,26 +499,26 @@ public class GameScreen extends InputAdapter implements Screen {
             font.setColor(Color.YELLOW);
             layout.setText(font, "LEVEL COMPLETE!");
             font.draw(batch, "LEVEL COMPLETE!",
-                Constants.WORLD_WIDTH / 2f - layout.width / 2f,
+                worldWidth / 2f - layout.width / 2f,
                 Constants.WORLD_HEIGHT / 2f + layout.height / 2f);
             font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 2f);
             font.setColor(Color.WHITE);
             layout.setText(font, "Tap to continue");
             font.draw(batch, "Tap to continue",
-                Constants.WORLD_WIDTH / 2f - layout.width / 2f,
+                worldWidth / 2f - layout.width / 2f,
                 Constants.WORLD_HEIGHT / 2f - 1f);
         } else if (state == GameState.LOST) {
             font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 5f);
             font.setColor(Color.RED);
             layout.setText(font, "LEVEL FAILED!");
             font.draw(batch, "LEVEL FAILED!",
-                Constants.WORLD_WIDTH / 2f - layout.width / 2f,
+                worldWidth / 2f - layout.width / 2f,
                 Constants.WORLD_HEIGHT / 2f + layout.height / 2f);
             font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 2f);
             font.setColor(Color.WHITE);
             layout.setText(font, "Tap to continue");
             font.draw(batch, "Tap to continue",
-                Constants.WORLD_WIDTH / 2f - layout.width / 2f,
+                worldWidth / 2f - layout.width / 2f,
                 Constants.WORLD_HEIGHT / 2f - 1f);
         }
 
@@ -504,6 +531,28 @@ public class GameScreen extends InputAdapter implements Screen {
     private void update(float delta) {
         // Step physics
         world.step(Constants.PHYSICS_TIME_STEP, Constants.VELOCITY_ITERATIONS, Constants.POSITION_ITERATIONS);
+
+        // Shooter pig AI — fire at birds in range
+        for (GameEntity entity : entities) {
+            if (entity instanceof ShooterPig && !entity.isMarkedForRemoval()) {
+                ShooterPig sp = (ShooterPig) entity;
+                Projectile proj = sp.update(delta, world, launchedBirds, currentBird);
+                if (proj != null) {
+                    projectiles.add(proj);
+                }
+            }
+        }
+
+        // Update projectiles
+        Iterator<Projectile> projIter = projectiles.iterator();
+        while (projIter.hasNext()) {
+            Projectile p = projIter.next();
+            p.update(delta);
+            if (p.isMarkedForRemoval()) {
+                world.destroyBody(p.getBody());
+                projIter.remove();
+            }
+        }
 
         // Check for explosive birds that have collided (egg bombs)
         for (Bird b : launchedBirds) {
@@ -551,7 +600,7 @@ public class GameScreen extends InputAdapter implements Screen {
         // Check win condition
         boolean pigsAlive = false;
         for (GameEntity e : entities) {
-            if (e instanceof Pig && !e.isMarkedForRemoval()) {
+            if ((e instanceof Pig || e instanceof ShooterPig) && !e.isMarkedForRemoval()) {
                 pigsAlive = true;
                 break;
             }
@@ -573,7 +622,7 @@ public class GameScreen extends InputAdapter implements Screen {
                     settleTimer = 0;
                 } else {
                     Vector2 pos = currentBird.getBody().getPosition();
-                    boolean offScreen = pos.x < -2 || pos.x > Constants.WORLD_WIDTH + 2 || pos.y < -2;
+                    boolean offScreen = pos.x < -2 || pos.x > worldWidth + 2 || pos.y < -2;
                     boolean stopped = stateTimer > 1f && currentBird.isStopped();
 
                     if (offScreen || stopped || stateTimer > 5f) {
@@ -608,7 +657,7 @@ public class GameScreen extends InputAdapter implements Screen {
     public void resize(int width, int height) {
         if (width <= 0 || height <= 0) return;
         viewport.update(width, height, true);
-        camera.position.set(Constants.WORLD_WIDTH / 2f, Constants.WORLD_HEIGHT / 2f, 0);
+        camera.position.set(worldWidth / 2f, Constants.WORLD_HEIGHT / 2f, 0);
         font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 2f);
     }
 
