@@ -17,6 +17,10 @@ public class ShooterPig extends GameEntity {
     private static final float COOLDOWN = 2.5f;
     private static final float PROJECTILE_SPEED = 16f;
 
+    // Reusable temp vectors for AI calculations
+    private final Vector2 tmpAim = new Vector2();
+    private final Vector2 tmpDir = new Vector2();
+
     public ShooterPig(World world, float x, float y, float attackRange) {
         super(createBody(world, x, y), new Color(0.6f, 0.0f, 0.6f, 1f));
         this.health = 20f;
@@ -74,11 +78,12 @@ public class ShooterPig extends GameEntity {
 
         Vector2 myPos = body.getPosition();
 
-        // Find nearest launched bird in range
+        // Find nearest launched bird in range (index-based loop, no iterator)
         Bird target = null;
         float closestDist = Float.MAX_VALUE;
 
-        for (Bird b : launchedBirds) {
+        for (int i = 0, n = launchedBirds.size(); i < n; i++) {
+            Bird b = launchedBirds.get(i);
             if (b.isMarkedForRemoval() || !b.isLaunched()) continue;
             float dist = myPos.dst(b.getBody().getPosition());
             if (dist < attackRange && dist < closestDist) {
@@ -87,7 +92,6 @@ public class ShooterPig extends GameEntity {
             }
         }
 
-        // Also check currentBird if it's been launched
         if (currentBird != null && currentBird.isLaunched() && !currentBird.isMarkedForRemoval()) {
             float dist = myPos.dst(currentBird.getBody().getPosition());
             if (dist < attackRange && dist < closestDist) {
@@ -97,46 +101,40 @@ public class ShooterPig extends GameEntity {
 
         if (target == null) return null;
 
-        // Fire with predictive aiming!
+        // Fire with predictive aiming (reuse tmpAim, tmpDir)
         cooldownTimer = COOLDOWN;
         Vector2 targetPos = target.getBody().getPosition();
         Vector2 targetVel = target.getBody().getLinearVelocity();
 
-        Vector2 aimPoint = new Vector2(targetPos);
+        tmpAim.set(targetPos);
 
-        // Only predict if bird is actually moving
         float speed = targetVel.len();
         if (speed > 0.5f) {
-            // Iterative prediction: 2 passes for better accuracy
             for (int i = 0; i < 2; i++) {
-                float dist = myPos.dst(aimPoint);
-                float timeToHit = Math.min(dist / PROJECTILE_SPEED, 0.8f); // cap at 0.8s
-
-                aimPoint.set(
+                float dist = myPos.dst(tmpAim);
+                float timeToHit = Math.min(dist / PROJECTILE_SPEED, 0.8f);
+                tmpAim.set(
                     targetPos.x + targetVel.x * timeToHit,
                     targetPos.y + targetVel.y * timeToHit + 0.5f * (-9.8f) * timeToHit * timeToHit
                 );
             }
-
-            // Clamp predicted position above ground
-            if (aimPoint.y < Constants.GROUND_HEIGHT + 0.2f) {
-                aimPoint.y = Constants.GROUND_HEIGHT + 0.2f;
+            if (tmpAim.y < Constants.GROUND_HEIGHT + 0.2f) {
+                tmpAim.y = Constants.GROUND_HEIGHT + 0.2f;
             }
         }
 
-        // Compensate for projectile's own gravity drop
-        float finalDist = myPos.dst(aimPoint);
+        float finalDist = myPos.dst(tmpAim);
         float flightTime = Math.min(finalDist / PROJECTILE_SPEED, 0.8f);
-        aimPoint.y += 0.5f * 9.8f * 0.3f * flightTime * flightTime; // 0.3 = projectile gravity scale
+        tmpAim.y += 0.5f * 9.8f * 0.3f * flightTime * flightTime;
 
-        Vector2 dir = new Vector2(aimPoint).sub(myPos).nor();
+        tmpDir.set(tmpAim).sub(myPos).nor();
 
         // Spawn projectile slightly in front of pig
-        float spawnX = myPos.x + dir.x * (HALF_SIZE + 0.15f);
-        float spawnY = myPos.y + dir.y * (HALF_SIZE + 0.15f);
+        float spawnX = myPos.x + tmpDir.x * (HALF_SIZE + 0.15f);
+        float spawnY = myPos.y + tmpDir.y * (HALF_SIZE + 0.15f);
 
         Projectile proj = new Projectile(world, spawnX, spawnY);
-        proj.getBody().setLinearVelocity(dir.x * PROJECTILE_SPEED, dir.y * PROJECTILE_SPEED);
+        proj.getBody().setLinearVelocity(tmpDir.x * PROJECTILE_SPEED, tmpDir.y * PROJECTILE_SPEED);
         return proj;
     }
 

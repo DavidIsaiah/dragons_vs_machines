@@ -14,8 +14,8 @@ import java.util.List;
 
 public class ContactHandler implements ContactListener {
     private boolean damageEnabled;
-    // TNTs queued for detonation (can't detonate inside callback)
     private final List<TNT> tntToDetonate = new ArrayList<TNT>();
+    private final Vector2 tmpKnockback = new Vector2();
 
     public ContactHandler() {
         this.damageEnabled = false;
@@ -64,8 +64,9 @@ public class ContactHandler implements ContactListener {
         if (!damageEnabled) return;
 
         float maxImpulse = 0;
-        for (float val : impulse.getNormalImpulses()) {
-            maxImpulse = Math.max(maxImpulse, val);
+        float[] impulses = impulse.getNormalImpulses();
+        for (int i = 0; i < impulses.length; i++) {
+            if (impulses[i] > maxImpulse) maxImpulse = impulses[i];
         }
 
         Object dataA = contact.getFixtureA().getBody().getUserData();
@@ -103,10 +104,10 @@ public class ContactHandler implements ContactListener {
         Projectile proj = (Projectile) maybeProj;
         Bird bird = (Bird) maybeBird;
 
-        // Apply knockback impulse to the bird
+        // Apply knockback impulse to the bird (reuse tmpKnockback)
         Vector2 projVel = proj.getBody().getLinearVelocity();
-        Vector2 knockback = new Vector2(projVel).nor().scl(Projectile.KNOCKBACK_FORCE);
-        bird.getBody().applyLinearImpulse(knockback, bird.getBody().getWorldCenter(), true);
+        tmpKnockback.set(projVel).nor().scl(Projectile.KNOCKBACK_FORCE);
+        bird.getBody().applyLinearImpulse(tmpKnockback, bird.getBody().getWorldCenter(), true);
 
         // Destroy projectile
         proj.markForRemoval();

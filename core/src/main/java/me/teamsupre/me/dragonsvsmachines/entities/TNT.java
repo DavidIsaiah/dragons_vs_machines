@@ -14,6 +14,9 @@ public class TNT extends GameEntity {
 
     private boolean hasDetonated;
 
+    // Reusable temp vector for explosion calculations
+    private final Vector2 tmpExpDir = new Vector2();
+
     // For debug visualization of last explosion
     private static Vector2 lastExplosionPos = null;
     private static float lastExplosionTimer = 0;
@@ -56,8 +59,9 @@ public class TNT extends GameEntity {
 
         Vector2 pos = body.getPosition();
 
-        // Store for debug drawing
-        lastExplosionPos = new Vector2(pos);
+        // Store for debug drawing (reuse static vector)
+        if (lastExplosionPos == null) lastExplosionPos = new Vector2();
+        lastExplosionPos.set(pos);
         lastExplosionTimer = 1.5f;
 
         world.QueryAABB(new QueryCallback() {
@@ -70,10 +74,11 @@ public class TNT extends GameEntity {
                 Vector2 otherPos = other.getPosition();
                 float dist = pos.dst(otherPos);
                 if (dist < EXPLOSION_RADIUS && dist > 0.01f) {
-                    Vector2 direction = new Vector2(otherPos).sub(pos).nor();
+                    tmpExpDir.set(otherPos).sub(pos).nor();
                     float strength = EXPLOSION_FORCE * (1f - dist / EXPLOSION_RADIUS);
+                    tmpExpDir.scl(strength);
                     other.applyLinearImpulse(
-                        direction.scl(strength),
+                        tmpExpDir,
                         other.getWorldCenter(), true
                     );
 

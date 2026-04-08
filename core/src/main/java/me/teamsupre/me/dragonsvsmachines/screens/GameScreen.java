@@ -28,7 +28,6 @@ import me.teamsupre.me.dragonsvsmachines.levels.LevelData;
 import me.teamsupre.me.dragonsvsmachines.physics.ContactHandler;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 public class GameScreen extends InputAdapter implements Screen {
@@ -37,7 +36,7 @@ public class GameScreen extends InputAdapter implements Screen {
     private float worldWidth;
 
     // Projectiles from shooter pigs
-    private List<Projectile> projectiles;
+    private final ArrayList<Projectile> projectiles = new ArrayList<Projectile>();
 
     // Physics
     private World world;
@@ -55,15 +54,19 @@ public class GameScreen extends InputAdapter implements Screen {
     private GlyphLayout layout;
 
     // Game entities
-    private List<GameEntity> entities;
-    private List<Bird> availableBirds;    // birds waiting to be launched
-    private List<Bird> launchedBirds;     // birds already in play
+    private final ArrayList<GameEntity> entities = new ArrayList<GameEntity>();
+    private final ArrayList<Bird> availableBirds = new ArrayList<Bird>();
+    private final ArrayList<Bird> launchedBirds = new ArrayList<Bird>();
     private Bird currentBird;
 
     // Slingshot state
     private boolean dragging;
-    private Vector2 dragPoint;
-    private Vector2 slingshotAnchor;
+    private final Vector2 dragPoint = new Vector2();
+    private final Vector2 slingshotAnchor = new Vector2();
+
+    // Reusable temp vectors — NEVER return these or store references
+    private final Vector2 tmpVec1 = new Vector2();
+    private final Vector2 tmpVec2 = new Vector2();
 
     // Game state
     private enum GameState { AIMING, FLYING, SETTLING, WON, LOST }
@@ -83,10 +86,8 @@ public class GameScreen extends InputAdapter implements Screen {
 
     @Override
     public void show() {
-        // Per-level world width
         worldWidth = LevelData.getWorldWidth(level);
 
-        // Camera setup — wider viewport for wider levels
         camera = new OrthographicCamera();
         float viewHeight = Constants.WORLD_HEIGHT;
         float viewWidth = Math.max(Constants.WORLD_WIDTH, worldWidth);
@@ -94,13 +95,11 @@ public class GameScreen extends InputAdapter implements Screen {
         camera.position.set(worldWidth / 2f, viewHeight / 2f, 0);
         camera.update();
 
-        // Physics world
         world = new World(new Vector2(0, -9.8f), true);
         contactHandler = new ContactHandler();
         world.setContactListener(contactHandler);
         debugRenderer = new Box2DDebugRenderer();
 
-        // Rendering
         shapeRenderer = new ShapeRenderer();
         batch = new SpriteBatch();
         font = new BitmapFont();
@@ -108,28 +107,23 @@ public class GameScreen extends InputAdapter implements Screen {
         font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 2f);
         layout = new GlyphLayout();
 
-        // Input
         Gdx.input.setInputProcessor(this);
-        dragPoint = new Vector2();
-        slingshotAnchor = new Vector2(Constants.SLINGSHOT_X, Constants.SLINGSHOT_Y);
+        slingshotAnchor.set(Constants.SLINGSHOT_X, Constants.SLINGSHOT_Y);
 
-        // Build the level
-        entities = new ArrayList<GameEntity>();
-        projectiles = new ArrayList<Projectile>();
+        entities.clear();
+        projectiles.clear();
+        availableBirds.clear();
+        launchedBirds.clear();
+
         createGround();
         LevelData.buildLevel(level, world, entities);
 
-        // Create birds with types from level data
-        availableBirds = new ArrayList<Bird>();
-        launchedBirds = new ArrayList<Bird>();
         BirdType[] birdTypes = LevelData.getBirdTypes(level);
-        for (BirdType birdType : birdTypes) {
-            availableBirds.add(new Bird(world, -10, -10, birdType));
+        for (int i = 0; i < birdTypes.length; i++) {
+            availableBirds.add(new Bird(world, -10, -10, birdTypes[i]));
         }
 
-        // Load first bird
         loadNextBird();
-
         state = GameState.AIMING;
         dragging = false;
         settleTimer = 0;
@@ -140,21 +134,16 @@ public class GameScreen extends InputAdapter implements Screen {
         BodyDef groundDef = new BodyDef();
         groundDef.type = BodyDef.BodyType.StaticBody;
         groundDef.position.set(worldWidth / 2f, Constants.GROUND_HEIGHT / 2f);
-
         Body ground = world.createBody(groundDef);
-
         PolygonShape groundBox = new PolygonShape();
         groundBox.setAsBox(worldWidth / 2f, Constants.GROUND_HEIGHT / 2f);
-
         FixtureDef fixtureDef = new FixtureDef();
         fixtureDef.shape = groundBox;
         fixtureDef.friction = 0.8f;
         fixtureDef.filter.categoryBits = Constants.CATEGORY_GROUND;
-
         ground.createFixture(fixtureDef);
         groundBox.dispose();
 
-        // Right wall
         BodyDef wallDef = new BodyDef();
         wallDef.type = BodyDef.BodyType.StaticBody;
         wallDef.position.set(worldWidth, Constants.WORLD_HEIGHT / 2f);
@@ -176,7 +165,7 @@ public class GameScreen extends InputAdapter implements Screen {
         }
     }
 
-    // --- Input handling ---
+    // --- Input handling (use tmpVec1 for unprojection) ---
 
     @Override
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
@@ -185,12 +174,12 @@ public class GameScreen extends InputAdapter implements Screen {
             return true;
         }
 
-        // Activate ability if bird is in flight or settling (Bomb can detonate anytime after launch)
         if ((state == GameState.FLYING || state == GameState.SETTLING) && currentBird != null && currentBird.canActivateAbility()) {
             BirdType activatingType = currentBird.getType();
             List<GameEntity> newEntities = currentBird.activateAbility(world);
             if (newEntities != null) {
-                for (GameEntity e : newEntities) {
+                for (int i = 0, n = newEntities.size(); i < n; i++) {
+                    GameEntity e = newEntities.get(i);
                     if (e instanceof Bird) {
                         launchedBirds.add((Bird) e);
                     } else {
@@ -198,7 +187,6 @@ public class GameScreen extends InputAdapter implements Screen {
                     }
                 }
             }
-            // Camera shake for explosive abilities
             if (activatingType == BirdType.BOMB) {
                 triggerShake(0.2f, 0.5f);
             } else if (activatingType == BirdType.BLUES) {
@@ -209,12 +197,13 @@ public class GameScreen extends InputAdapter implements Screen {
 
         if (state != GameState.AIMING || currentBird == null) return false;
 
-        Vector2 touchWorld = viewport.unproject(new Vector2(screenX, screenY));
+        tmpVec1.set(screenX, screenY);
+        viewport.unproject(tmpVec1);
 
-        float distToBird = touchWorld.dst(currentBird.getBody().getPosition());
+        float distToBird = tmpVec1.dst(currentBird.getBody().getPosition());
         if (distToBird < 1.0f) {
             dragging = true;
-            dragPoint.set(touchWorld);
+            dragPoint.set(tmpVec1);
             return true;
         }
         return false;
@@ -224,17 +213,17 @@ public class GameScreen extends InputAdapter implements Screen {
     public boolean touchDragged(int screenX, int screenY, int pointer) {
         if (!dragging) return false;
 
-        Vector2 worldPos = viewport.unproject(new Vector2(screenX, screenY));
-        dragPoint.set(worldPos);
+        tmpVec1.set(screenX, screenY);
+        viewport.unproject(tmpVec1);
+        dragPoint.set(tmpVec1);
 
-        // Clamp pull distance
-        Vector2 pull = new Vector2(dragPoint).sub(slingshotAnchor);
-        if (pull.len() > Constants.MAX_PULL_DISTANCE) {
-            pull.nor().scl(Constants.MAX_PULL_DISTANCE);
-            dragPoint.set(slingshotAnchor).add(pull);
+        // Clamp pull distance (reuse tmpVec1)
+        tmpVec1.set(dragPoint).sub(slingshotAnchor);
+        if (tmpVec1.len() > Constants.MAX_PULL_DISTANCE) {
+            tmpVec1.nor().scl(Constants.MAX_PULL_DISTANCE);
+            dragPoint.set(slingshotAnchor).add(tmpVec1);
         }
 
-        // Move bird to drag position
         currentBird.getBody().setTransform(dragPoint, 0);
         return true;
     }
@@ -244,17 +233,16 @@ public class GameScreen extends InputAdapter implements Screen {
         if (!dragging) return false;
         dragging = false;
 
-        // Calculate launch impulse (opposite of pull direction)
-        Vector2 pull = new Vector2(slingshotAnchor).sub(dragPoint);
-        if (pull.len() < 0.2f) {
-            // Too small, snap back
+        // Calculate launch impulse (reuse tmpVec1)
+        tmpVec1.set(slingshotAnchor).sub(dragPoint);
+        if (tmpVec1.len() < 0.2f) {
             currentBird.getBody().setTransform(slingshotAnchor, 0);
             return true;
         }
 
-        Vector2 impulse = pull.scl(Constants.LAUNCH_POWER);
+        tmpVec1.scl(Constants.LAUNCH_POWER);
         contactHandler.enableDamage();
-        currentBird.launch(impulse);
+        currentBird.launch(tmpVec1);
         launchedBirds.add(currentBird);
         state = GameState.FLYING;
         stateTimer = 0;
@@ -275,7 +263,6 @@ public class GameScreen extends InputAdapter implements Screen {
     }
 
     private void triggerShake(float intensity, float duration) {
-        // Stack shakes — take the stronger one
         if (intensity > shakeIntensity) {
             shakeIntensity = intensity;
         }
@@ -283,36 +270,30 @@ public class GameScreen extends InputAdapter implements Screen {
         shakeTimer = 0;
     }
 
-    // --- Update & Render ---
+    // --- Update & Render (all loops use index-based iteration) ---
 
     @Override
     public void render(float delta) {
-        // Clamp delta
         delta = Math.min(delta, 0.05f);
-
         update(delta);
 
-        // Clear
         Gdx.gl.glClearColor(0.4f, 0.65f, 0.9f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
-        // Apply camera shake
+        // Camera shake
         camera.position.set(worldWidth / 2f, Constants.WORLD_HEIGHT / 2f, 0);
         if (shakeTimer < shakeDuration) {
             shakeTimer += delta;
-            float progress = shakeTimer / shakeDuration;
-            float damping = 1f - progress; // fade out
-            float offsetX = MathUtils.random(-shakeIntensity, shakeIntensity) * damping;
-            float offsetY = MathUtils.random(-shakeIntensity, shakeIntensity) * damping;
-            camera.position.x += offsetX;
-            camera.position.y += offsetY;
+            float damping = 1f - shakeTimer / shakeDuration;
+            camera.position.x += MathUtils.random(-shakeIntensity, shakeIntensity) * damping;
+            camera.position.y += MathUtils.random(-shakeIntensity, shakeIntensity) * damping;
         } else {
             shakeIntensity = 0;
             shakeDuration = 0;
         }
         camera.update();
 
-        // Draw filled shapes
+        // --- Filled shapes ---
         Gdx.gl.glEnable(GL20.GL_BLEND);
         shapeRenderer.setProjectionMatrix(camera.combined);
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
@@ -321,46 +302,37 @@ public class GameScreen extends InputAdapter implements Screen {
         shapeRenderer.setColor(0.3f, 0.6f, 0.2f, 1f);
         shapeRenderer.rect(0, 0, worldWidth, Constants.GROUND_HEIGHT);
 
-        // Slingshot base
+        // Slingshot
         shapeRenderer.setColor(0.4f, 0.25f, 0.1f, 1f);
         shapeRenderer.rect(Constants.SLINGSHOT_X - 0.08f, Constants.GROUND_HEIGHT,
             0.16f, Constants.SLINGSHOT_Y - Constants.GROUND_HEIGHT + 0.3f);
-
-        // Slingshot fork
         shapeRenderer.rect(Constants.SLINGSHOT_X - 0.25f, Constants.SLINGSHOT_Y + 0.1f, 0.12f, 0.4f);
         shapeRenderer.rect(Constants.SLINGSHOT_X + 0.13f, Constants.SLINGSHOT_Y + 0.1f, 0.12f, 0.4f);
 
-        // Draw entities
-        for (GameEntity entity : entities) {
+        // Entities + debug overlays (single pass)
+        for (int i = 0, n = entities.size(); i < n; i++) {
+            GameEntity entity = entities.get(i);
             entity.render(shapeRenderer);
-        }
-
-        // Debug: draw TNT blast radius (subtle fill)
-        for (GameEntity entity : entities) {
             if (entity instanceof TNT) {
                 ((TNT) entity).renderBlastRadius(shapeRenderer);
-            }
-        }
-
-        // Debug: draw shooter pig attack range (subtle fill)
-        for (GameEntity entity : entities) {
-            if (entity instanceof ShooterPig) {
+            } else if (entity instanceof ShooterPig) {
                 ((ShooterPig) entity).renderAttackRange(shapeRenderer);
             }
         }
 
-        // Draw projectiles
-        for (Projectile p : projectiles) {
-            p.render(shapeRenderer);
+        // Projectiles
+        for (int i = 0, n = projectiles.size(); i < n; i++) {
+            projectiles.get(i).render(shapeRenderer);
         }
 
-        // Draw current bird on slingshot
+        // Current bird
         if (currentBird != null && !currentBird.isMarkedForRemoval()) {
             currentBird.render(shapeRenderer);
         }
 
-        // Draw all launched birds still in play
-        for (Bird b : launchedBirds) {
+        // Launched birds
+        for (int i = 0, n = launchedBirds.size(); i < n; i++) {
+            Bird b = launchedBirds.get(i);
             if (!b.isMarkedForRemoval()) {
                 b.render(shapeRenderer);
             }
@@ -368,35 +340,30 @@ public class GameScreen extends InputAdapter implements Screen {
 
         shapeRenderer.end();
 
-        // Draw elastic band while dragging
+        // --- Elastic band + trajectory (while dragging) ---
         if (dragging && currentBird != null) {
             shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
             shapeRenderer.setColor(0.3f, 0.15f, 0.05f, 1f);
             Gdx.gl.glLineWidth(3f);
 
             Vector2 birdPos = currentBird.getBody().getPosition();
-            // Left band
             shapeRenderer.line(Constants.SLINGSHOT_X - 0.19f, Constants.SLINGSHOT_Y + 0.45f,
                 birdPos.x, birdPos.y);
-            // Right band
             shapeRenderer.line(Constants.SLINGSHOT_X + 0.19f, Constants.SLINGSHOT_Y + 0.45f,
                 birdPos.x, birdPos.y);
             shapeRenderer.end();
             Gdx.gl.glLineWidth(1f);
 
-            // Draw trajectory prediction dots with ground bounce simulation
-            Vector2 pull = new Vector2(slingshotAnchor).sub(dragPoint);
-            if (pull.len() > 0.2f) {
-                Vector2 launchImpulse = new Vector2(pull).scl(Constants.LAUNCH_POWER);
+            // Trajectory prediction (reuse tmpVec1 for pull calc)
+            tmpVec1.set(slingshotAnchor).sub(dragPoint);
+            if (tmpVec1.len() > 0.2f) {
                 float mass = currentBird.getBody().getMass();
-                float simVx = launchImpulse.x / mass;
-                float simVy = launchImpulse.y / mass;
+                float simVx = tmpVec1.x * Constants.LAUNCH_POWER / mass;
+                float simVy = tmpVec1.y * Constants.LAUNCH_POWER / mass;
                 float gravity = -9.8f;
                 float groundY = Constants.GROUND_HEIGHT + Constants.BIRD_RADIUS;
                 float restitution = 0.2f;
                 float friction = 0.5f;
-
-                // Step-based simulation to handle bounces
                 float simX = dragPoint.x;
                 float simY = dragPoint.y;
                 float dt = 0.02f;
@@ -405,52 +372,41 @@ public class GameScreen extends InputAdapter implements Screen {
                 int numDots = 16;
                 int stepsPerDot = 4;
                 for (int i = 0; i < numDots; i++) {
-                    // Advance simulation several sub-steps per dot
                     for (int s = 0; s < stepsPerDot; s++) {
                         simVy += gravity * dt;
                         simX += simVx * dt;
                         simY += simVy * dt;
-
-                        // Ground bounce
                         if (simY <= groundY) {
                             simY = groundY;
                             simVy = -simVy * restitution;
                             simVx *= (1f - friction * dt * 5f);
-
-                            // Stop if barely moving
-                            if (Math.abs(simVy) < 0.3f) {
-                                simVy = 0;
-                            }
+                            if (Math.abs(simVy) < 0.3f) simVy = 0;
                         }
-
-                        // Right wall bounce
                         if (simX >= worldWidth) {
                             simX = worldWidth;
                             simVx = -simVx * restitution;
                         }
                     }
-
-                    // Stop drawing if essentially at rest on ground
                     if (simY <= groundY + 0.01f && Math.abs(simVy) < 0.1f && Math.abs(simVx) < 0.3f) break;
                     if (simX < -1f) break;
 
                     float alpha = 1f - (float) i / numDots;
                     shapeRenderer.setColor(1f, 1f, 1f, alpha * 0.7f);
-                    float dotSize = 0.05f + 0.03f * (1f - alpha);
-                    shapeRenderer.circle(simX, simY, dotSize, 8);
+                    shapeRenderer.circle(simX, simY, 0.05f + 0.03f * (1f - alpha), 8);
                 }
                 shapeRenderer.end();
             }
         }
 
-        // Box2D debug renderer (wireframes)
+        // Box2D debug
         debugRenderer.render(world, camera.combined);
 
-        // Debug: draw explosion radius ring and shooter pig range outlines
+        // Debug outlines (shooter pig range + TNT explosion)
         shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
         Gdx.gl.glLineWidth(2f);
         TNT.renderDebugExplosions(shapeRenderer, delta);
-        for (GameEntity entity : entities) {
+        for (int i = 0, n = entities.size(); i < n; i++) {
+            GameEntity entity = entities.get(i);
             if (entity instanceof ShooterPig) {
                 ((ShooterPig) entity).renderAttackRangeOutline(shapeRenderer);
             }
@@ -458,25 +414,24 @@ public class GameScreen extends InputAdapter implements Screen {
         shapeRenderer.end();
         Gdx.gl.glLineWidth(1f);
 
-        // Draw HUD text
+        // --- HUD ---
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
 
         font.setColor(Color.WHITE);
         int birdsLeft = availableBirds.size();
-
         String birdName = currentBird != null ? currentBird.getType().name : "";
         font.draw(batch, "Birds: " + birdsLeft + "  |  " + birdName + "  |  Level " + level + "  |  ESC=Menu  R=Restart",
             0.3f, Constants.WORLD_HEIGHT - 0.3f);
 
-        // Pigs remaining
         int pigsLeft = 0;
-        for (GameEntity e : entities) {
+        for (int i = 0, n = entities.size(); i < n; i++) {
+            GameEntity e = entities.get(i);
             if ((e instanceof Pig || e instanceof ShooterPig) && !e.isMarkedForRemoval()) pigsLeft++;
         }
         font.draw(batch, "Pigs: " + pigsLeft, 0.3f, Constants.WORLD_HEIGHT - 0.8f);
 
-        // Ability hint during flight
+        // Ability hint
         if (state == GameState.FLYING && currentBird != null && currentBird.canActivateAbility()) {
             font.setColor(Color.YELLOW);
             String hint = "";
@@ -488,83 +443,68 @@ public class GameScreen extends InputAdapter implements Screen {
                 default: break;
             }
             layout.setText(font, hint);
-            font.draw(batch, hint, Constants.WORLD_WIDTH / 2f - layout.width / 2f,
+            font.draw(batch, hint, worldWidth / 2f - layout.width / 2f,
                 Constants.WORLD_HEIGHT - 0.3f);
             font.setColor(Color.WHITE);
         }
 
         // Win/Lose overlay
-        if (state == GameState.WON) {
+        if (state == GameState.WON || state == GameState.LOST) {
+            boolean won = state == GameState.WON;
             font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 5f);
-            font.setColor(Color.YELLOW);
-            layout.setText(font, "LEVEL COMPLETE!");
-            font.draw(batch, "LEVEL COMPLETE!",
-                worldWidth / 2f - layout.width / 2f,
+            font.setColor(won ? Color.YELLOW : Color.RED);
+            String msg = won ? "LEVEL COMPLETE!" : "LEVEL FAILED!";
+            layout.setText(font, msg);
+            font.draw(batch, msg, worldWidth / 2f - layout.width / 2f,
                 Constants.WORLD_HEIGHT / 2f + layout.height / 2f);
             font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 2f);
             font.setColor(Color.WHITE);
             layout.setText(font, "Tap to continue");
-            font.draw(batch, "Tap to continue",
-                worldWidth / 2f - layout.width / 2f,
-                Constants.WORLD_HEIGHT / 2f - 1f);
-        } else if (state == GameState.LOST) {
-            font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 5f);
-            font.setColor(Color.RED);
-            layout.setText(font, "LEVEL FAILED!");
-            font.draw(batch, "LEVEL FAILED!",
-                worldWidth / 2f - layout.width / 2f,
-                Constants.WORLD_HEIGHT / 2f + layout.height / 2f);
-            font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 2f);
-            font.setColor(Color.WHITE);
-            layout.setText(font, "Tap to continue");
-            font.draw(batch, "Tap to continue",
-                worldWidth / 2f - layout.width / 2f,
+            font.draw(batch, "Tap to continue", worldWidth / 2f - layout.width / 2f,
                 Constants.WORLD_HEIGHT / 2f - 1f);
         }
 
-        // Reset font scale
         font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 2f);
-
         batch.end();
     }
 
     private void update(float delta) {
-        // Step physics
         world.step(Constants.PHYSICS_TIME_STEP, Constants.VELOCITY_ITERATIONS, Constants.POSITION_ITERATIONS);
 
-        // Shooter pig AI — fire at birds in range
-        for (GameEntity entity : entities) {
+        // Shooter pig AI
+        for (int i = 0, n = entities.size(); i < n; i++) {
+            GameEntity entity = entities.get(i);
             if (entity instanceof ShooterPig && !entity.isMarkedForRemoval()) {
-                ShooterPig sp = (ShooterPig) entity;
-                Projectile proj = sp.update(delta, world, launchedBirds, currentBird);
+                Projectile proj = ((ShooterPig) entity).update(delta, world, launchedBirds, currentBird);
                 if (proj != null) {
                     projectiles.add(proj);
                 }
             }
         }
 
-        // Update projectiles
-        Iterator<Projectile> projIter = projectiles.iterator();
-        while (projIter.hasNext()) {
-            Projectile p = projIter.next();
+        // Update projectiles (reverse iterate for removal)
+        for (int i = projectiles.size() - 1; i >= 0; i--) {
+            Projectile p = projectiles.get(i);
             p.update(delta);
             if (p.isMarkedForRemoval()) {
                 world.destroyBody(p.getBody());
-                projIter.remove();
+                projectiles.remove(i);
             }
         }
 
-        // Check for explosive birds that have collided (egg bombs)
-        for (Bird b : launchedBirds) {
+        // Explosive birds
+        for (int i = 0, n = launchedBirds.size(); i < n; i++) {
+            Bird b = launchedBirds.get(i);
             if (b.isExplodeOnImpact() && b.hasCollided() && !b.isMarkedForRemoval()) {
                 b.triggerExplosion(world);
                 triggerShake(0.15f, 0.4f);
             }
         }
 
-        // Detonate TNTs queued by contact handler
+        // TNT detonation queue
         List<TNT> tntQueue = contactHandler.getTntToDetonate();
-        for (TNT tnt : tntQueue) {
+        for (int i = 0, n = tntQueue.size(); i < n; i++) {
+            TNT tnt = tntQueue.get(i);
             if (!tnt.hasDetonated()) {
                 tnt.detonate(world);
                 triggerShake(0.25f, 0.5f);
@@ -572,34 +512,32 @@ public class GameScreen extends InputAdapter implements Screen {
         }
         tntQueue.clear();
 
-        // Remove destroyed entities
-        Iterator<GameEntity> iter = entities.iterator();
-        while (iter.hasNext()) {
-            GameEntity entity = iter.next();
+        // Remove destroyed entities (reverse iterate)
+        for (int i = entities.size() - 1; i >= 0; i--) {
+            GameEntity entity = entities.get(i);
             if (entity.isMarkedForRemoval()) {
                 world.destroyBody(entity.getBody());
-                iter.remove();
+                entities.remove(i);
             }
         }
 
-        // Remove destroyed launched birds
-        Iterator<Bird> birdIter = launchedBirds.iterator();
-        while (birdIter.hasNext()) {
-            Bird b = birdIter.next();
+        // Remove destroyed launched birds (reverse iterate)
+        for (int i = launchedBirds.size() - 1; i >= 0; i--) {
+            Bird b = launchedBirds.get(i);
             if (b.isMarkedForRemoval()) {
                 world.destroyBody(b.getBody());
-                birdIter.remove();
+                launchedBirds.remove(i);
             }
         }
 
-        // Handle currentBird being destroyed by its own ability
         if (currentBird != null && currentBird.isMarkedForRemoval()) {
             currentBird = null;
         }
 
-        // Check win condition
+        // Win condition
         boolean pigsAlive = false;
-        for (GameEntity e : entities) {
+        for (int i = 0, n = entities.size(); i < n; i++) {
+            GameEntity e = entities.get(i);
             if ((e instanceof Pig || e instanceof ShooterPig) && !e.isMarkedForRemoval()) {
                 pigsAlive = true;
                 break;
@@ -617,37 +555,30 @@ public class GameScreen extends InputAdapter implements Screen {
             case FLYING:
                 stateTimer += delta;
                 if (currentBird == null || currentBird.isMarkedForRemoval()) {
-                    // Bird destroyed itself (Bomb/Blues ability) — move to settling
                     state = GameState.SETTLING;
                     settleTimer = 0;
                 } else {
                     Vector2 pos = currentBird.getBody().getPosition();
                     boolean offScreen = pos.x < -2 || pos.x > worldWidth + 2 || pos.y < -2;
                     boolean stopped = stateTimer > 1f && currentBird.isStopped();
-
                     if (offScreen || stopped || stateTimer > 5f) {
                         state = GameState.SETTLING;
                         settleTimer = 0;
                     }
                 }
                 break;
-
             case SETTLING:
                 settleTimer += delta;
                 if (settleTimer > 2f) {
-                    // Move to next bird or game over
                     if (!availableBirds.isEmpty()) {
                         loadNextBird();
                         state = GameState.AIMING;
-                    } else {
-                        if (pigsAlive) {
-                            state = GameState.LOST;
-                            stateTimer = 0;
-                        }
+                    } else if (pigsAlive) {
+                        state = GameState.LOST;
+                        stateTimer = 0;
                     }
                 }
                 break;
-
             default:
                 break;
         }

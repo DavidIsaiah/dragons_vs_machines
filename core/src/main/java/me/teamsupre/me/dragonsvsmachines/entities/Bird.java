@@ -16,6 +16,9 @@ public class Bird extends GameEntity {
     private boolean hasCollided;
     private final BirdType type;
 
+    // Reusable temp vector for explosion calculations
+    private final Vector2 tmpExpDir = new Vector2();
+
     public enum BirdType {
         RED("Red", new Color(0.9f, 0.1f, 0.1f, 1f), 2.0f, 0.25f),
         CHUCK("Chuck", new Color(1.0f, 0.85f, 0.0f, 1f), 3.0f, 0.22f),
@@ -167,10 +170,11 @@ public class Bird extends GameEntity {
                 Vector2 otherPos = other.getPosition();
                 float dist = pos.dst(otherPos);
                 if (dist < explosionRadius && dist > 0.01f) {
-                    Vector2 direction = new Vector2(otherPos).sub(pos).nor();
+                    tmpExpDir.set(otherPos).sub(pos).nor();
                     float strength = explosionForce * (1f - dist / explosionRadius);
+                    tmpExpDir.scl(strength);
                     other.applyLinearImpulse(
-                        direction.scl(strength),
+                        tmpExpDir,
                         other.getWorldCenter(), true
                     );
 
