@@ -17,6 +17,7 @@ import com.badlogic.gdx.physics.box2d.*;
 import com.badlogic.gdx.utils.viewport.FitViewport;
 import me.teamsupre.me.dragonsvsmachines.Constants;
 import me.teamsupre.me.dragonsvsmachines.DragonsVsMachines;
+import me.teamsupre.me.dragonsvsmachines.ParallaxBackground;
 import me.teamsupre.me.dragonsvsmachines.entities.Bird;
 import me.teamsupre.me.dragonsvsmachines.entities.Bird.BirdType;
 import me.teamsupre.me.dragonsvsmachines.entities.GameEntity;
@@ -64,6 +65,12 @@ public class GameScreen extends InputAdapter implements Screen {
     private final Vector2 dragPoint = new Vector2();
     private final Vector2 slingshotAnchor = new Vector2();
 
+    // Camera panning state
+    private boolean panning;
+    private float panStartScreenX;
+    private float panStartCameraX;
+    private float cameraX; // current pan position (world X)
+
     // Reusable temp vectors — NEVER return these or store references
     private final Vector2 tmpVec1 = new Vector2();
     private final Vector2 tmpVec2 = new Vector2();
@@ -73,6 +80,9 @@ public class GameScreen extends InputAdapter implements Screen {
     private GameState state;
     private float settleTimer;
     private float stateTimer;
+
+    // Parallax background
+    private final ParallaxBackground parallax = new ParallaxBackground();
 
     // Camera shake
     private float shakeIntensity;
@@ -89,10 +99,7 @@ public class GameScreen extends InputAdapter implements Screen {
         worldWidth = LevelData.getWorldWidth(level);
 
         camera = new OrthographicCamera();
-        float viewHeight = Constants.WORLD_HEIGHT;
-        float viewWidth = Math.max(Constants.WORLD_WIDTH, worldWidth);
-        viewport = new FitViewport(viewWidth, viewHeight, camera);
-        camera.position.set(worldWidth / 2f, viewHeight / 2f, 0);
+        viewport = new FitViewport(Constants.WORLD_WIDTH, Constants.WORLD_HEIGHT, camera);
         camera.update();
 
         world = new World(new Vector2(0, -9.8f), true);
@@ -126,6 +133,9 @@ public class GameScreen extends InputAdapter implements Screen {
         loadNextBird();
         state = GameState.AIMING;
         dragging = false;
+        panning = false;
+        cameraX = Constants.WORLD_WIDTH / 2f;
+        clampCameraX();
         settleTimer = 0;
         stateTimer = 0;
     }
@@ -165,7 +175,15 @@ public class GameScreen extends InputAdapter implements Screen {
         }
     }
 
-    // --- Input handling (use tmpVec1 for unprojection) ---
+    // --- Input handling ---
+    // Near the bird during AIMING: drag to aim slingshot
+    // Elsewhere or during FLYING/SETTLING: drag to pan camera
+    // Tap during FLYING/SETTLING: activate bird ability (if available)
+
+    private void clampCameraX() {
+        float halfView = viewport.getWorldWidth() / 2f;
+        cameraX = MathUtils.clamp(cameraX, halfView, worldWidth - halfView);
+    }
 
     @Override
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
@@ -174,24 +192,32 @@ public class GameScreen extends InputAdapter implements Screen {
             return true;
         }
 
-        if ((state == GameState.FLYING || state == GameState.SETTLING) && currentBird != null && currentBird.canActivateAbility()) {
-            BirdType activatingType = currentBird.getType();
-            List<GameEntity> newEntities = currentBird.activateAbility(world);
-            if (newEntities != null) {
-                for (int i = 0, n = newEntities.size(); i < n; i++) {
-                    GameEntity e = newEntities.get(i);
-                    if (e instanceof Bird) {
-                        launchedBirds.add((Bird) e);
-                    } else {
-                        entities.add(e);
+        // During FLYING/SETTLING: tap activates ability, or starts pan
+        if (state == GameState.FLYING || state == GameState.SETTLING) {
+            if (currentBird != null && currentBird.canActivateAbility()) {
+                BirdType activatingType = currentBird.getType();
+                List<GameEntity> newEntities = currentBird.activateAbility(world);
+                if (newEntities != null) {
+                    for (int i = 0, n = newEntities.size(); i < n; i++) {
+                        GameEntity e = newEntities.get(i);
+                        if (e instanceof Bird) {
+                            launchedBirds.add((Bird) e);
+                        } else {
+                            entities.add(e);
+                        }
                     }
                 }
+                if (activatingType == BirdType.BOMB) {
+                    triggerShake(0.2f, 0.5f);
+                } else if (activatingType == BirdType.BLUES) {
+                    triggerShake(0.08f, 0.2f);
+                }
+                return true;
             }
-            if (activatingType == BirdType.BOMB) {
-                triggerShake(0.2f, 0.5f);
-            } else if (activatingType == BirdType.BLUES) {
-                triggerShake(0.08f, 0.2f);
-            }
+            // No ability — start panning
+            panning = true;
+            panStartScreenX = screenX;
+            panStartCameraX = cameraX;
             return true;
         }
 
@@ -201,39 +227,61 @@ public class GameScreen extends InputAdapter implements Screen {
         viewport.unproject(tmpVec1);
 
         float distToBird = tmpVec1.dst(currentBird.getBody().getPosition());
-        if (distToBird < 1.0f) {
+        if (distToBird < 1.5f) {
+            // Close to bird — start slingshot drag
             dragging = true;
             dragPoint.set(tmpVec1);
             return true;
         }
-        return false;
-    }
 
-    @Override
-    public boolean touchDragged(int screenX, int screenY, int pointer) {
-        if (!dragging) return false;
-
-        tmpVec1.set(screenX, screenY);
-        viewport.unproject(tmpVec1);
-        dragPoint.set(tmpVec1);
-
-        // Clamp pull distance (reuse tmpVec1)
-        tmpVec1.set(dragPoint).sub(slingshotAnchor);
-        if (tmpVec1.len() > Constants.MAX_PULL_DISTANCE) {
-            tmpVec1.nor().scl(Constants.MAX_PULL_DISTANCE);
-            dragPoint.set(slingshotAnchor).add(tmpVec1);
-        }
-
-        currentBird.getBody().setTransform(dragPoint, 0);
+        // Far from bird — start camera pan
+        panning = true;
+        panStartScreenX = screenX;
+        panStartCameraX = cameraX;
         return true;
     }
 
     @Override
+    public boolean touchDragged(int screenX, int screenY, int pointer) {
+        if (dragging) {
+            tmpVec1.set(screenX, screenY);
+            viewport.unproject(tmpVec1);
+            dragPoint.set(tmpVec1);
+
+            // Clamp pull distance
+            tmpVec1.set(dragPoint).sub(slingshotAnchor);
+            if (tmpVec1.len() > Constants.MAX_PULL_DISTANCE) {
+                tmpVec1.nor().scl(Constants.MAX_PULL_DISTANCE);
+                dragPoint.set(slingshotAnchor).add(tmpVec1);
+            }
+
+            currentBird.getBody().setTransform(dragPoint, 0);
+            return true;
+        }
+
+        if (panning) {
+            // Convert screen pixel delta to world units
+            float screenDeltaX = screenX - panStartScreenX;
+            float worldUnitsPerPixel = viewport.getWorldWidth() / viewport.getScreenWidth();
+            cameraX = panStartCameraX - screenDeltaX * worldUnitsPerPixel;
+            clampCameraX();
+            return true;
+        }
+
+        return false;
+    }
+
+    @Override
     public boolean touchUp(int screenX, int screenY, int pointer, int button) {
+        if (panning) {
+            panning = false;
+            return true;
+        }
+
         if (!dragging) return false;
         dragging = false;
 
-        // Calculate launch impulse (reuse tmpVec1)
+        // Calculate launch impulse
         tmpVec1.set(slingshotAnchor).sub(dragPoint);
         if (tmpVec1.len() < 0.2f) {
             currentBird.getBody().setTransform(slingshotAnchor, 0);
@@ -246,6 +294,14 @@ public class GameScreen extends InputAdapter implements Screen {
         launchedBirds.add(currentBird);
         state = GameState.FLYING;
         stateTimer = 0;
+        return true;
+    }
+
+    @Override
+    public boolean scrolled(float amountX, float amountY) {
+        // Mouse wheel panning
+        cameraX += amountY * 2f;
+        clampCameraX();
         return true;
     }
 
@@ -276,12 +332,13 @@ public class GameScreen extends InputAdapter implements Screen {
     public void render(float delta) {
         delta = Math.min(delta, 0.05f);
         update(delta);
+        parallax.update(delta);
 
-        Gdx.gl.glClearColor(0.4f, 0.65f, 0.9f, 1f);
+        Gdx.gl.glClearColor(0.15f, 0.3f, 0.7f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 
         // Camera shake
-        camera.position.set(worldWidth / 2f, Constants.WORLD_HEIGHT / 2f, 0);
+        camera.position.set(cameraX, Constants.WORLD_HEIGHT / 2f, 0);
         if (shakeTimer < shakeDuration) {
             shakeTimer += delta;
             float damping = 1f - shakeTimer / shakeDuration;
@@ -298,7 +355,12 @@ public class GameScreen extends InputAdapter implements Screen {
         shapeRenderer.setProjectionMatrix(camera.combined);
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled);
 
-        // Ground
+        // Parallax background layers
+        float viewW = viewport.getWorldWidth();
+        float viewH = viewport.getWorldHeight();
+        parallax.render(shapeRenderer, camera.position.x, viewW, viewH);
+
+        // Ground (on top of parallax)
         shapeRenderer.setColor(0.3f, 0.6f, 0.2f, 1f);
         shapeRenderer.rect(0, 0, worldWidth, Constants.GROUND_HEIGHT);
 
@@ -588,7 +650,7 @@ public class GameScreen extends InputAdapter implements Screen {
     public void resize(int width, int height) {
         if (width <= 0 || height <= 0) return;
         viewport.update(width, height, true);
-        camera.position.set(worldWidth / 2f, Constants.WORLD_HEIGHT / 2f, 0);
+        camera.position.set(cameraX, Constants.WORLD_HEIGHT / 2f, 0);
         font.getData().setScale(viewport.getWorldHeight() / Gdx.graphics.getHeight() * 2f);
     }
 
